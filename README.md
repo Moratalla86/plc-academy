@@ -487,9 +487,16 @@ producen un error con ubicación. Las variables internas retienen su estado entr
 scan toma una instantánea de entradas y confirma de forma atómica los cambios de salidas y
 memoria. El periodo aceptado es de 1 a 100 ms. La vista web compila el mismo runtime a
 WebAssembly y permite editar y compilar ST, cambiar entradas, inspeccionar memoria y
-ejecutar scans paso a paso o en ciclo automático. El editor ST queda junto al simulador,
-resalta comentarios y las asignaciones mientras se recorre el programa. Ladder,
-temporizadores, contadores y escenas todavía no están implementados. En el editor,
+ejecutar scans paso a paso o en ciclo automático. Junto al simulador se puede alternar
+entre el ST y una representación Ladder de la práctica Marcha/Paro: dos peldaños,
+contactos NO/NC que muestran apertura, cierre y continuidad, enclavamiento, bobinas
+y ecuaciones con seguimiento del peldaño activo. La animación usa la imagen de entradas
+muestreada, memoria, salidas y runtime; los cambios pendientes se identifican hasta
+ejecutar el scan. La vista incluye un editor visual experimental que permite arrastrar o
+añadir contactos NO/NC y bobinas a esos peldaños y retirarlos. Los elementos añadidos son
+solo visuales: aún no alteran el programa ejecutado ni se compilan como LD; el editor
+general y la compilación de programas LD personalizados aún no están implementados.
+Temporizadores, contadores y escenas todavía no están implementados. En el editor,
 `Enter` conserva la sangría, continúa comentarios `//` y `(* ... *)`, expande
 pares vacíos y crea líneas indentadas antes de cierres `)`/`*)`; también ajusta tras
 `VAR`/`END_VAR`. `Tab` y
