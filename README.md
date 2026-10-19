@@ -516,6 +516,18 @@ la selección del texto. Durante la traza, la
 vista del programa acompaña la línea activa para mantener visible la ejecución
 en programas largos.
 
+El aula incluye además una práctica de comunicaciones con generador e inspector
+de peticiones Modbus RTU (CRC-16 calculado) y Modbus TCP (cabecera MBAP), junto
+a esquemas didácticos de PROFINET IO y EtherNet/IP para distinguir capas,
+direcciones y tipos de tráfico. Los esquemas de PROFINET y EtherNet/IP no
+representan capturas completas: los bytes exactos dependen de la configuración
+del dispositivo y de la conexión. El simulador muestra también una cinta
+transportadora visual cuyo movimiento sigue la salida `Q0.0 Motor`; por ahora
+es una vista unidireccional, los sensores se accionan manualmente y no hay
+modelo físico ni realimentación desde la planta al PLC. Al pausar el ciclo
+automático se congela la animación, aunque el estado de la salida del motor
+permanezca activo.
+
 Requisitos de desarrollo: Node.js 20 o posterior, npm y Rust estable con Cargo.
 
 ```sh
