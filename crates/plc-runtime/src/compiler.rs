@@ -1,9 +1,17 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::Instruction;
+use crate::{Instruction, SourceLocation};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompileError {
+    pub line: usize,
+    pub column: usize,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompilerWarning {
+    pub code: String,
     pub line: usize,
     pub column: usize,
     pub message: String,
@@ -15,11 +23,37 @@ pub struct CompiledProgram {
     pub outputs: Vec<String>,
     pub variables: Vec<String>,
     pub bytecode: Vec<Instruction>,
+    pub source_map: Vec<SourceLocation>,
+    pub warnings: Vec<CompilerWarning>,
+}
+
+impl CompiledProgram {
+    pub fn supports_ladder_latch_view(&self) -> bool {
+        self.inputs.len() == 2
+            && self.inputs[0].eq_ignore_ascii_case("Start")
+            && self.inputs[1].eq_ignore_ascii_case("Stop")
+            && self.outputs.len() == 1
+            && self.outputs[0].eq_ignore_ascii_case("Motor")
+            && self.variables.len() == 1
+            && self.variables[0].eq_ignore_ascii_case("Running")
+            && self.bytecode
+                == [
+                    Instruction::LoadVariable(0),
+                    Instruction::LoadInput(0),
+                    Instruction::Or,
+                    Instruction::LoadInput(1),
+                    Instruction::Not,
+                    Instruction::And,
+                    Instruction::StoreVariable(0),
+                    Instruction::LoadVariable(0),
+                    Instruction::StoreOutput(0),
+                ]
+    }
 }
 
 pub fn compile_st(source: &str) -> Result<CompiledProgram, CompileError> {
-    let tokens = Lexer::new(source).tokenize()?;
-    Parser::new(tokens).compile()
+    let (tokens, eof_location) = Lexer::new(source).tokenize()?;
+    Parser::new(tokens, eof_location).compile()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +63,7 @@ enum TokenKind {
     VarOutput,
     Var,
     EndVar,
+    EndOfFile,
     Bool(bool),
     And,
     Or,
@@ -64,7 +99,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn tokenize(mut self) -> Result<Vec<Token>, CompileError> {
+    fn tokenize(mut self) -> Result<(Vec<Token>, SourceLocation), CompileError> {
         let mut tokens = Vec::new();
         while let Some(character) = self.peek() {
             if character.is_whitespace() {
@@ -143,7 +178,16 @@ impl<'a> Lexer<'a> {
             };
             tokens.push(Token { kind, line, column });
         }
-        Ok(tokens)
+        let eof_location = SourceLocation {
+            line: self.line,
+            column: self.column,
+        };
+        tokens.push(Token {
+            kind: TokenKind::EndOfFile,
+            line: eof_location.line,
+            column: eof_location.column,
+        });
+        Ok((tokens, eof_location))
     }
 
     fn identifier(&mut self) -> Token {
@@ -211,10 +255,18 @@ struct Parser {
     output_indices: HashMap<String, usize>,
     variable_indices: HashMap<String, usize>,
     bytecode: Vec<Instruction>,
+    source_map: Vec<SourceLocation>,
+    eof_location: SourceLocation,
+    input_locations: Vec<SourceLocation>,
+    output_locations: Vec<SourceLocation>,
+    variable_locations: Vec<SourceLocation>,
+    read_inputs: HashSet<usize>,
+    read_variables: HashSet<usize>,
+    written_outputs: HashSet<usize>,
 }
 
 impl Parser {
-    fn new(tokens: Vec<Token>) -> Self {
+    fn new(tokens: Vec<Token>, eof_location: SourceLocation) -> Self {
         Self {
             tokens,
             cursor: 0,
@@ -225,6 +277,14 @@ impl Parser {
             output_indices: HashMap::new(),
             variable_indices: HashMap::new(),
             bytecode: Vec::new(),
+            source_map: Vec::new(),
+            eof_location,
+            input_locations: Vec::new(),
+            output_locations: Vec::new(),
+            variable_locations: Vec::new(),
+            read_inputs: HashSet::new(),
+            read_variables: HashSet::new(),
+            written_outputs: HashSet::new(),
         }
     }
 
@@ -244,7 +304,7 @@ impl Parser {
         }
 
         let mut statement_count = 0;
-        while self.current().is_some() {
+        while !matches!(self.current_kind(), None | Some(TokenKind::EndOfFile)) {
             self.parse_assignment()?;
             statement_count += 1;
         }
@@ -256,11 +316,14 @@ impl Parser {
             return Err(self.error_at_current("Declara al menos una salida con VAR_OUTPUT"));
         }
 
+        let warnings = self.collect_warnings();
         Ok(CompiledProgram {
             inputs: self.inputs,
             outputs: self.outputs,
             variables: self.variables,
             bytecode: self.bytecode,
+            source_map: self.source_map,
+            warnings,
         })
     }
 
@@ -272,6 +335,11 @@ impl Parser {
             if matches!(self.current_kind(), Some(TokenKind::EndVar)) {
                 self.advance();
                 return Ok(());
+            }
+            if matches!(self.current_kind(), None | Some(TokenKind::EndOfFile)) {
+                return Err(self.error_at_current(
+                    "Se esperaba END_VAR al final de las declaraciones",
+                ));
             }
 
             let (name, token) = self.expect_identifier("Se esperaba el nombre de la variable")?;
@@ -298,16 +366,31 @@ impl Parser {
 
             match declaration_kind {
                 DeclarationKind::Input => {
-                    self.input_indices.insert(key, self.inputs.len());
+                    let index = self.inputs.len();
+                    self.input_indices.insert(key, index);
                     self.inputs.push(name);
+                    self.input_locations.push(SourceLocation {
+                        line: token.line,
+                        column: token.column,
+                    });
                 }
                 DeclarationKind::Output => {
-                    self.output_indices.insert(key, self.outputs.len());
+                    let index = self.outputs.len();
+                    self.output_indices.insert(key, index);
                     self.outputs.push(name);
+                    self.output_locations.push(SourceLocation {
+                        line: token.line,
+                        column: token.column,
+                    });
                 }
                 DeclarationKind::Variable => {
-                    self.variable_indices.insert(key, self.variables.len());
+                    let index = self.variables.len();
+                    self.variable_indices.insert(key, index);
                     self.variables.push(name);
+                    self.variable_locations.push(SourceLocation {
+                        line: token.line,
+                        column: token.column,
+                    });
                 }
             }
         }
@@ -320,7 +403,10 @@ impl Parser {
         let output_index = self.output_indices.get(&target_key).copied();
         let variable_index = self.variable_indices.get(&target_key).copied();
         let store_instruction = match (output_index, variable_index) {
-            (Some(index), None) => Instruction::StoreOutput(index),
+            (Some(index), None) => {
+                self.written_outputs.insert(index);
+                Instruction::StoreOutput(index)
+            }
             (None, Some(index)) => Instruction::StoreVariable(index),
             _ => {
                 return Err(Self::error(
@@ -335,16 +421,17 @@ impl Parser {
             TokenKind::Semicolon,
             "Se esperaba ';' al final de la asignación",
         )?;
-        self.bytecode.push(store_instruction);
+        self.push_instruction(store_instruction, &target_token);
         Ok(())
     }
 
     fn parse_or_expression(&mut self) -> Result<(), CompileError> {
         self.parse_and_expression()?;
         while matches!(self.current_kind(), Some(TokenKind::Or)) {
+            let operator = self.current().cloned().expect("OR token exists");
             self.advance();
             self.parse_and_expression()?;
-            self.bytecode.push(Instruction::Or);
+            self.push_instruction(Instruction::Or, &operator);
         }
         Ok(())
     }
@@ -352,18 +439,20 @@ impl Parser {
     fn parse_and_expression(&mut self) -> Result<(), CompileError> {
         self.parse_unary_expression()?;
         while matches!(self.current_kind(), Some(TokenKind::And)) {
+            let operator = self.current().cloned().expect("AND token exists");
             self.advance();
             self.parse_unary_expression()?;
-            self.bytecode.push(Instruction::And);
+            self.push_instruction(Instruction::And, &operator);
         }
         Ok(())
     }
 
     fn parse_unary_expression(&mut self) -> Result<(), CompileError> {
         if matches!(self.current_kind(), Some(TokenKind::Not)) {
+            let operator = self.current().cloned().expect("NOT token exists");
             self.advance();
             self.parse_unary_expression()?;
-            self.bytecode.push(Instruction::Not);
+            self.push_instruction(Instruction::Not, &operator);
             return Ok(());
         }
         self.parse_primary()
@@ -378,19 +467,21 @@ impl Parser {
                 self.advance();
                 let key = name.to_ascii_uppercase();
                 let instruction = if let Some(&index) = self.input_indices.get(&key) {
+                    self.read_inputs.insert(index);
                     Instruction::LoadInput(index)
                 } else if let Some(&index) = self.variable_indices.get(&key) {
+                    self.read_variables.insert(index);
                     Instruction::LoadVariable(index)
                 } else if let Some(&index) = self.output_indices.get(&key) {
                     Instruction::LoadOutput(index)
                 } else {
                     return Err(Self::error(&token, format!("Variable desconocida: {name}")));
                 };
-                self.bytecode.push(instruction);
+                self.push_instruction(instruction, &token);
             }
             TokenKind::Bool(value) => {
                 self.advance();
-                self.bytecode.push(Instruction::LoadBool(value));
+                self.push_instruction(Instruction::LoadBool(value), &token);
             }
             TokenKind::LeftParen => {
                 self.advance();
@@ -442,11 +533,57 @@ impl Parser {
         self.cursor += 1;
     }
 
+    fn push_instruction(&mut self, instruction: Instruction, token: &Token) {
+        self.bytecode.push(instruction);
+        self.source_map.push(SourceLocation {
+            line: token.line,
+            column: token.column,
+        });
+    }
+
+    fn collect_warnings(&self) -> Vec<CompilerWarning> {
+        let mut warnings = Vec::new();
+        for (index, name) in self.inputs.iter().enumerate() {
+            if !self.read_inputs.contains(&index) {
+                let location = self.input_locations[index];
+                warnings.push(CompilerWarning {
+                    code: "unused_input".into(),
+                    line: location.line,
+                    column: location.column,
+                    message: format!("La entrada '{name}' está declarada pero no se utiliza"),
+                });
+            }
+        }
+        for (index, name) in self.outputs.iter().enumerate() {
+            if !self.written_outputs.contains(&index) {
+                let location = self.output_locations[index];
+                warnings.push(CompilerWarning {
+                    code: "unassigned_output".into(),
+                    line: location.line,
+                    column: location.column,
+                    message: format!("La salida '{name}' nunca recibe una asignación"),
+                });
+            }
+        }
+        for (index, name) in self.variables.iter().enumerate() {
+            if !self.read_variables.contains(&index) {
+                let location = self.variable_locations[index];
+                warnings.push(CompilerWarning {
+                    code: "unused_variable".into(),
+                    line: location.line,
+                    column: location.column,
+                    message: format!("La variable interna '{name}' nunca se lee"),
+                });
+            }
+        }
+        warnings
+    }
+
     fn error_at_current(&self, message: &str) -> CompileError {
         self.current().map_or_else(
             || CompileError {
-                line: self.tokens.last().map_or(1, |token| token.line),
-                column: self.tokens.last().map_or(1, |token| token.column + 1),
+                line: self.eof_location.line,
+                column: self.eof_location.column,
                 message: message.to_owned(),
             },
             |token| Self::error(token, message.to_owned()),
@@ -602,5 +739,82 @@ mod tests {
         assert_eq!(error.line, 4);
         assert_eq!(error.column, 1);
         assert!(error.message.contains("Comentario sin cerrar"));
+    }
+
+    #[test]
+    fn traces_multiple_assignments_on_the_same_line_with_distinct_locations() {
+        let source = "VAR_OUTPUT\nMotor : BOOL;\nEND_VAR\nMotor := TRUE; Motor := FALSE;";
+        let program = compile_st(source).unwrap();
+        let mut runtime = Runtime::with_source_map(
+            program.bytecode,
+            program.source_map,
+            program.inputs.len(),
+            program.outputs.len(),
+            program.variables.len(),
+            10,
+        )
+        .unwrap();
+
+        let trace = runtime.scan().unwrap().trace;
+        assert_eq!(trace.len(), 2);
+        assert_eq!(trace[0].location.line, 4);
+        assert_eq!(trace[1].location.line, 4);
+        assert!(trace[1].location.column > trace[0].location.column);
+        assert!(trace[0].value);
+        assert!(!trace[1].value);
+    }
+
+    #[test]
+    fn reports_missing_end_var_at_end_of_file() {
+        let source = "VAR_INPUT\nStart : BOOL;";
+        let error = compile_st(source).unwrap_err();
+        assert_eq!(error.line, 2);
+        assert_eq!(error.column, 14);
+        assert!(error.message.contains("END_VAR"));
+    }
+
+    #[test]
+    fn reports_unused_inputs_and_unassigned_outputs_as_warnings() {
+        let program = compile_st(
+            "VAR_INPUT\nUnused : BOOL;\nEND_VAR\nVAR_OUTPUT\nMotor : BOOL;\nLamp : BOOL;\nEND_VAR\nMotor := TRUE;",
+        )
+        .unwrap();
+
+        assert_eq!(
+            program
+                .warnings
+                .iter()
+                .map(|warning| warning.code.as_str())
+                .collect::<Vec<_>>(),
+            ["unused_input", "unassigned_output"]
+        );
+        assert_eq!(program.warnings[0].line, 2);
+        assert_eq!(program.warnings[1].line, 6);
+    }
+
+    #[test]
+    fn ladder_compatibility_uses_compiled_semantics_not_source_formatting() {
+        let source = r#"
+            VAR_INPUT
+                Start : BOOL; Stop : BOOL;
+            END_VAR
+            VAR
+                Running : BOOL;
+            END_VAR
+            VAR_OUTPUT
+                Motor : BOOL;
+            END_VAR
+            // whitespace and comments do not affect compatibility
+            Running := ( Running OR Start ) AND NOT Stop;
+            Motor := Running;
+        "#;
+        assert!(compile_st(source)
+            .unwrap()
+            .supports_ladder_latch_view());
+
+        let different_logic = source.replace("NOT Stop", "Stop");
+        assert!(!compile_st(&different_logic)
+            .unwrap()
+            .supports_ladder_latch_view());
     }
 }

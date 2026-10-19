@@ -8,10 +8,13 @@
     "dev": "vite",
     "prebuild": "npm run build:wasm",
     "build": "tsc -b && vite build",
+    "test": "vitest run",
     "preview": "vite preview",
     "build:wasm": "wasm-pack build ../../crates/plc-runtime --target web --out-dir ../../apps/web/src/wasm --out-name plc_runtime --no-pack"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "monaco-editor": "^0.57.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -21,6 +24,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "~5.7.2",
     "vite": "^6.0.7",
+    "vitest": "^2.1.9",
     "wasm-pack": "^0.15.0"
   }
 }

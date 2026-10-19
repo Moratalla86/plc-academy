@@ -10,3 +10,9 @@ pub enum Instruction {
     StoreOutput(usize),
     StoreVariable(usize),
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SourceLocation {
+    pub line: usize,
+    pub column: usize,
+}

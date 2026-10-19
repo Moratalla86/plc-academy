@@ -1471,6 +1471,36 @@ h1 span {
   outline: none;
 }
 
+.plc-monaco-editor {
+  width: calc(100% - 28px);
+  height: 320px;
+  margin: 0 14px 10px;
+  overflow: hidden;
+  border: 1px solid #34414b;
+  border-radius: 6px;
+}
+
+.plc-monaco-editor:focus-within {
+  border-color: var(--accent);
+}
+
+.plc-editor-active-execution-line {
+  background: #86efac24;
+}
+
+.plc-editor-active-glyph {
+  background: #22c55e;
+  border-radius: 50%;
+}
+
+.classroom-app[data-theme="light"] .plc-monaco-editor {
+  border-color: #cbd5e1;
+}
+
+.classroom-app[data-theme="light"] .plc-editor-active-execution-line {
+  background: #22c55e20;
+}
+
 .compile-button {
   min-height: 29px;
   margin: 0 14px 14px;
